@@ -7,5 +7,6 @@
 		public bool DnsSec { get; set; }
 		public bool NoLogs { get; set; }
 		public bool Failed { get; set; }
+		public Certificate Certificate { get; set; }
 	}
 }
