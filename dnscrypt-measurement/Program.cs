@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using dnscrypt_measurement.Model;
 using dnscrypt_measurement.Tools;
 using DNS.Client;
@@ -15,7 +17,13 @@ namespace dnscrypt_measurement
 {
 	internal class Program
 	{
+
 		private static void Main(string[] args)
+		{
+			MainAsync(args).Wait();
+		}
+
+		private static async Task MainAsync(IEnumerable<string> args)
 		{
 			var showHelp = false;
 			var list = "dnscrypt-proxy.csv";
@@ -51,10 +59,9 @@ namespace dnscrypt_measurement
 				}
 			};
 
-			List<string> extra;
 			try
 			{
-				extra = p.Parse(args);
+				p.Parse(args);
 			}
 			catch (OptionException e)
 			{
@@ -73,7 +80,7 @@ namespace dnscrypt_measurement
 			if (File.Exists(list))
 			{
 				var proxyList = ProxyListManager.ReadProxyList(list, true, onlyDnssec, noLogs);
-				var measurements = Measure(proxyList);
+				var measurements = await Measure(proxyList).ConfigureAwait(false);
 				measurements.Sort((a, b) => a.Time.CompareTo(b.Time));
 				Console.WriteLine("=====================================");
 				Console.WriteLine($"{measurements.Count} Resolvers (fastest first)");
@@ -135,7 +142,7 @@ namespace dnscrypt_measurement
 			return dateTime;
 		}
 
-		private static List<Measurement> Measure(List<DnsCryptProxyEntry> proxyList)
+		private static async Task<List<Measurement>> Measure(List<DnsCryptProxyEntry> proxyList)
 		{
 			var measurements = new List<Measurement>();
 			foreach (var proxy in proxyList)
@@ -148,23 +155,60 @@ namespace dnscrypt_measurement
 				};
 				try
 				{
+
+					string address;
+					var port = 443;
+					if (proxy.ResolverAddress.Contains(":"))
+					{
+						if (proxy.ResolverAddress.StartsWith("["))
+						{
+							//IPv6
+							var id = proxy.ResolverAddress.LastIndexOf(':');
+							address = proxy.ResolverAddress.Substring(0, id).Replace("[", "").Replace("]", "");
+							port = Convert.ToInt32(proxy.ResolverAddress.Substring(id + 1));
+						}
+						else
+						{
+							//IPv4
+							var t = proxy.ResolverAddress.Split(':');
+							address = t[0];
+							port = Convert.ToInt32(t[1]);
+						}
+					}
+					else
+					{
+						address = proxy.ResolverAddress;
+					}
+
 					var providerKey = Utilities.HexToBinary(proxy.ProviderPublicKey);
-					var request = new ClientRequest(proxy.ResolverAddress, 443);
+					var request = new ClientRequest(address, port);
 					request.Questions.Add(new Question(Domain.FromString(proxy.ProviderName), RecordType.TXT));
 					request.RecursionDesired = true;
 					var sw = Stopwatch.StartNew();
-					var response = request.Resolve();
+					var response = await request.Resolve().ConfigureAwait(false);
 					sw.Stop();
-					var data = response.AnswerRecords[0].Data;
 
-					if (Encoding.ASCII.GetString(ArrayHelper.SubArray(data, 0, 9)).Equals("|DNSC\0\u0001\0\0"))
+					foreach (var answerRecord in response.AnswerRecords)
 					{
-						var certificate = ExtractCertificate(ArrayHelper.SubArray(data, 9), providerKey);
-						if (certificate != null)
+						var certificates = new List<Certificate>();
+						var tr = Encoding.ASCII.GetString(ArrayHelper.SubArray(answerRecord.Data, 0, 9));
+						if (tr.Equals("|DNSC\0\u0001\0\0") || tr.Equals("|DNSC\0\u0002\0\0"))
 						{
-							measurement.Certificate = certificate;
-							if (certificate.Valid)
+							var certificate = ExtractCertificate(ArrayHelper.SubArray(answerRecord.Data, 9), providerKey);
+							if (certificate != null)
 							{
+								if (certificate.Valid)
+								{
+									certificates.Add(certificate);
+								}
+							}
+						}
+						if (certificates.Count > 0)
+						{
+							var newestCertificate = certificates.OrderByDescending(item => item.Serial).FirstOrDefault();
+							if (newestCertificate != null)
+							{
+								measurement.Certificate = newestCertificate;
 								measurement.Failed = false;
 							}
 							else
