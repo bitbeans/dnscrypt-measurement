@@ -1,5 +1,7 @@
 # dnscrypt-measurement [![License](http://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](https://github.com/bitbeans/dnscrypt-measurement/blob/master/LICENSE.md)
 
+**Deprecated use https://github.com/bitbeans/DnsCrypt.Toolbox instead!**
+
 Simple tool to find the fastest DNSCrypt resolver.
 Queries are NOT authenticated (for now)!
 ## Usage
